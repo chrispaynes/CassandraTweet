@@ -1,0 +1,33 @@
+version: "3.7"
+networks:
+    proxy:
+        driver: bridge
+services:
+    tweet-producer:
+        container_name: tweet-producer
+        build:
+            context: .
+            dockerfile: ./docker/golang/Dockerfile
+        image: producer:latest
+        restart: always
+        networks:
+            - proxy
+        volumes:
+            - "./producer/:/go/src/app"
+    cassandra:
+        container_name: cassandra
+        build:
+            context: .
+            dockerfile: ./docker/cassandra/Dockerfile
+        image: cassandratweet:latest
+        restart: always
+        networks:
+            - proxy
+        ports:
+            - "9090:9090"
+            - "7000:7000"
+            - "7001:7001"
+            - "7199:7199"
+            - "9042:9042"
+            - "9160:9160"
+        # volumes:
