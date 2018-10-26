@@ -14,6 +14,7 @@ services:
             - proxy
         volumes:
             - "./producer/:/go/src/app"
+        env_file: "./producer/configs/app.toml"
     cassandra:
         container_name: cassandra
         build:

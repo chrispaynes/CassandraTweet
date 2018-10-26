@@ -1,5 +1,7 @@
 FROM golang:1.11.0
 
+RUN apt-get update
+
 WORKDIR /go/src/app
 
 ENV GOBIN /go/bin
