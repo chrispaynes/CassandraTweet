@@ -16,9 +16,9 @@ type TwitterConfig struct {
 
 // CassandraConfig represents a connection to the Cassandra DB cluster
 type CassandraConfig struct {
-	Keyspace   string `split_words:"true"`
-	TweetTable string `split_words:"true"`
-	Host       string `split_words:"true"`
+	Keyspace   string   `split_words:"true"`
+	TweetTable string   `split_words:"true"`
+	Host       []string `split_words:"true"`
 }
 
 func main() {
@@ -39,7 +39,7 @@ func main() {
 		log.Fatal(err.Error())
 	}
 
-	cluster := gocql.NewCluster(cc.Host)
+	cluster := gocql.NewCluster(cc.Host...)
 	cluster.Keyspace = cc.Keyspace
 	cluster.Consistency = gocql.Quorum
 	session, err := cluster.CreateSession()
