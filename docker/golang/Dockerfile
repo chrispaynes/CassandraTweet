@@ -11,6 +11,6 @@ COPY ./producer .
 RUN go get ./... \
     && go get github.com/pilu/fresh
 
-WORKDIR ./cmd
+WORKDIR /go/src/app/cmd
 
 ENTRYPOINT [ "fresh" ]

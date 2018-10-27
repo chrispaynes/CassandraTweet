@@ -11,7 +11,9 @@ services:
             - cassandra
         volumes:
             - "./producer/:/go/src/app"
-        env_file: "./producer/configs/app.toml"
+        env_file:
+            - "./producer/configs/app.toml"
+            - "./docker/cassandra/cassandra.env"
     cassandra:
         container_name: cassandra
         build:
@@ -26,4 +28,5 @@ services:
             - "7199:7199"
             - "9042:9042"
             - "9160:9160"
-        # volumes:
+        env_file: "./docker/cassandra/cassandra.env"
+
