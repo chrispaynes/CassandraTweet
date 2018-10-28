@@ -12,7 +12,7 @@ services:
         volumes:
             - "./producer/:/go/src/app"
         env_file:
-            - "./producer/configs/app.toml"
+            - "./producer/configs/app.env"
             - "./docker/cassandra/cassandra.env"
     cassandra:
         container_name: cassandra

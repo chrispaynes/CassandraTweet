@@ -1,6 +1,13 @@
 package main
 
 import (
+	"fmt"
+	"net/url"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/ChimeraCoder/anaconda"
 	"github.com/gocql/gocql"
 	"github.com/kelseyhightower/envconfig"
 	log "github.com/sirupsen/logrus"
@@ -33,6 +40,13 @@ func main() {
 		log.Fatal(err.Error())
 	}
 
+	anaconda.SetConsumerKey(tc.ConsumerKey)
+	anaconda.SetConsumerSecret(tc.ConsumerSecret)
+	api := anaconda.NewTwitterApi(tc.AccessToken, tc.AccessSecret)
+
+	v := url.Values{}
+	s := api.PublicStreamSample(v)
+
 	err = envconfig.Process("CASSANDRA", &cc)
 
 	if err != nil {
@@ -50,8 +64,21 @@ func main() {
 
 	defer session.Close()
 
-	if err := session.Query(`insert into tweet(id, created_at, text) values (?, ?, ?)`,
-		gocql.TimeUUID(), "Wed Aug 27 13:08:45 +0000 2008", "Hello World").Exec(); err != nil {
-		log.Fatalf("failed to insert tweet into database: %s", err.Error())
+	for t := range s.C {
+		switch v := t.(type) {
+		case anaconda.Tweet:
+			fmt.Printf("%v: %-15s: %s\n", v.CreatedAt, v.User.ScreenName, v.Text)
+			if err := session.Query(`insert into tweet(id, created_at, text) values (?, ?, ?)`,
+				gocql.TimeUUID(), v.CreatedAt, v.Text).Exec(); err != nil {
+				log.Fatalf("failed to insert tweet into database: %s", err.Error())
+			}
+		}
 	}
+
+	ch := make(chan os.Signal)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	log.Println(<-ch)
+
+	log.Info("stopping stream")
+	s.Stop()
 }
