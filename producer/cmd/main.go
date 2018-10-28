@@ -28,6 +28,15 @@ type CassandraConfig struct {
 	Host       []string `split_words:"true"`
 }
 
+// user represents the author of a tweet and a CassandraDB User-Defined-Type(UDT)
+type user struct {
+	UserID     int64  `cql:"user_id"`
+	CreatedAt  string `cql:"created_at"`
+	Name       string `cql:"name"`
+	ScreenName string `cql:"screen_name"`
+	Followers  int    `cql:"followers"`
+}
+
 func main() {
 	log.SetFormatter(&log.JSONFormatter{})
 
@@ -46,6 +55,7 @@ func main() {
 
 	v := url.Values{}
 	s := api.PublicStreamSample(v)
+	defer s.Stop()
 
 	err = envconfig.Process("CASSANDRA", &cc)
 
@@ -67,10 +77,18 @@ func main() {
 	for t := range s.C {
 		switch v := t.(type) {
 		case anaconda.Tweet:
-			fmt.Printf("%v: %-15s: %s\n", v.CreatedAt, v.User.ScreenName, v.Text)
-			if err := session.Query(`insert into tweet(id, created_at, text) values (?, ?, ?)`,
-				gocql.TimeUUID(), v.CreatedAt, v.Text).Exec(); err != nil {
-				log.Fatalf("failed to insert tweet into database: %s", err.Error())
+			if v.Lang == "en" && v.User.Id != 0 && v.User.CreatedAt != "" && v.User.Name != "" && v.User.ScreenName != "" && v.User.FollowersCount != 0 {
+				go func() {
+					err := session.Query(`insert into tweet(id, user, created_at, text) values (?, ?, ?, ?)`,
+						gocql.TimeUUID(),
+						user{UserID: v.User.Id, CreatedAt: v.User.CreatedAt, Name: v.User.Name, ScreenName: v.User.ScreenName, Followers: v.User.FollowersCount},
+						v.CreatedAt,
+						v.Text).Exec()
+
+					if err != nil {
+						log.Fatalf("failed to insert tweet into database: %s", err.Error())
+					}
+				}()
 			}
 		}
 	}
