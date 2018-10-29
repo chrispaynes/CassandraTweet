@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"net/url"
 	"os"
 	"os/signal"
 	"sync"
@@ -20,15 +22,6 @@ type TwitterConfig struct {
 	AccessSecret   string `split_words:"true"`
 }
 
-// user represents the author of a tweet and a CassandraDB User-Defined-Type(UDT)
-type user struct {
-	UserID     int64  `cql:"user_id"`
-	CreatedAt  string `cql:"created_at"`
-	Name       string `cql:"name"`
-	ScreenName string `cql:"screen_name"`
-	Followers  int    `cql:"followers"`
-}
-
 func main() {
 	log.SetFormatter(&log.JSONFormatter{})
 
@@ -44,10 +37,8 @@ func main() {
 	anaconda.SetConsumerSecret(tc.ConsumerSecret)
 	api := anaconda.NewTwitterApi(tc.AccessToken, tc.AccessSecret)
 
-	// v := url.Values{}
-	_ = api
-	// s := api.PublicStreamSample(v)
-	s := anaconda.Stream{}
+	v := url.Values{}
+	s := api.PublicStreamSample(v)
 	defer s.Stop()
 
 	config := kafka.NewConfig()
@@ -59,6 +50,7 @@ func main() {
 	}
 
 	log.Infof("successfully created new Kafka producer: %v", producer)
+	log.Infof("twitter stream: %v", s)
 
 	// graceful shutdown
 	signals := make(chan os.Signal, 1)
@@ -86,43 +78,32 @@ func main() {
 		}
 	}()
 
-	message := &kafka.ProducerMessage{Topic: "Tweets", Key: kafka.StringEncoder("kakfa1"), Value: kafka.StringEncoder("KAFKA TEST!!!")}
-	log.Infof("created new Producer Message: %v", message)
-	producer.Input() <- message
-	enqueued++
-
 	for t := range s.C {
 		switch v := t.(type) {
 		case anaconda.Tweet:
 			if v.Lang == "en" && v.User.Id != 0 && v.User.CreatedAt != "" && v.User.Name != "" && v.User.ScreenName != "" && v.User.FollowersCount != 0 {
 				go func() {
-					// send tweet to Kafka topic
-
-					var results []byte
-
-					err := v.UnmarshalJSON(results)
+					b, err := json.Marshal(v)
 
 					if err != nil {
-						log.Errorf("could not unmarshall tweet to bytes: %s", err.Error())
+						log.Fatalf("could not unmarshal tweet to bytes: %s", err.Error())
 					}
 
-				ProducerLoop:
-					for {
-						message := &kafka.ProducerMessage{Topic: "tweets", Value: kafka.StringEncoder(string(results))}
-						select {
-						case producer.Input() <- message:
-							enqueued++
-						case <-signals:
-							producer.AsyncClose() // shutdown the producer
-							break ProducerLoop
-						}
+					message := &kafka.ProducerMessage{Topic: "Tweets", Key: kafka.StringEncoder("kafka1"), Value: kafka.ByteEncoder(b)}
+					log.Infof("created new Producer Message: %v", message)
+
+					select {
+					case producer.Input() <- message:
+						enqueued++
+					case <-signals:
+						producer.AsyncClose() // shutdown the producer
+						break
 					}
 
 					wg.Wait()
 
 					log.Printf("produced: %d; errors: %d\n", successes, errors)
 
-					// end kafka tweet logic
 					if err != nil {
 						log.Fatalf("failed to send twitter message to kafka stream: %s", err.Error())
 					}

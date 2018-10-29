@@ -1,24 +1,16 @@
 package main
 
 import (
-	"net/url"
+	"encoding/json"
 	"os"
 	"os/signal"
-	"syscall"
 
 	"github.com/ChimeraCoder/anaconda"
+	kafka "github.com/Shopify/sarama"
 	"github.com/gocql/gocql"
 	"github.com/kelseyhightower/envconfig"
 	log "github.com/sirupsen/logrus"
 )
-
-// TwitterConfig represents a connection to the Twitter API
-type TwitterConfig struct {
-	ConsumerKey    string `split_words:"true"`
-	ConsumerSecret string `split_words:"true"`
-	AccessToken    string `split_words:"true"`
-	AccessSecret   string `split_words:"true"`
-}
 
 // CassandraConfig represents a connection to the Cassandra DB cluster
 type CassandraConfig struct {
@@ -39,27 +31,12 @@ type user struct {
 func main() {
 	log.SetFormatter(&log.JSONFormatter{})
 
-	var tc TwitterConfig
 	var cc CassandraConfig
 
-	err := envconfig.Process("TWITTER", &tc)
+	err := envconfig.Process("CASSANDRA", &cc)
 
 	if err != nil {
-		log.Fatal(err.Error())
-	}
-
-	anaconda.SetConsumerKey(tc.ConsumerKey)
-	anaconda.SetConsumerSecret(tc.ConsumerSecret)
-	api := anaconda.NewTwitterApi(tc.AccessToken, tc.AccessSecret)
-
-	v := url.Values{}
-	s := api.PublicStreamSample(v)
-	defer s.Stop()
-
-	err = envconfig.Process("CASSANDRA", &cc)
-
-	if err != nil {
-		log.Fatal(err.Error())
+		log.Fatalf("failed to load CassandraDB environment variables: %s", err.Error())
 	}
 
 	cluster := gocql.NewCluster(cc.Host...)
@@ -73,29 +50,66 @@ func main() {
 
 	defer session.Close()
 
-	for t := range s.C {
-		switch v := t.(type) {
-		case anaconda.Tweet:
-			if v.Lang == "en" && v.User.Id != 0 && v.User.CreatedAt != "" && v.User.Name != "" && v.User.ScreenName != "" && v.User.FollowersCount != 0 {
-				go func() {
-					err := session.Query(`insert into tweet(id, user, created_at, text) values (?, ?, ?, ?)`,
-						gocql.TimeUUID(),
-						user{UserID: v.User.Id, CreatedAt: v.User.CreatedAt, Name: v.User.Name, ScreenName: v.User.ScreenName, Followers: v.User.FollowersCount},
-						v.CreatedAt,
-						v.Text).Exec()
+	consumer, err := kafka.NewConsumer([]string{"kafka1:9092"}, nil)
 
-					if err != nil {
-						log.Fatalf("failed to insert tweet into database: %s", err.Error())
-					}
-				}()
+	if err != nil {
+		log.Fatalf("failed to create new Kafka consumer: %s", err.Error())
+	}
+
+	defer func() {
+		if err := consumer.Close(); err != nil {
+			log.Fatalf("failed to close consumer: %s", err.Error())
+		}
+	}()
+
+	partitionConsumer, err := consumer.ConsumePartition("Tweets", 0, kafka.OffsetNewest)
+
+	if err != nil {
+		log.Fatalf("failed to consume the kafka partition %s", err.Error())
+	}
+
+	defer func() {
+		if err := partitionConsumer.Close(); err != nil {
+			log.Fatalf("failed to close the kafka partition consumer: %s", err.Error())
+		}
+	}()
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt)
+
+	consumed := 0
+
+ConsumerLoop:
+	for {
+		select {
+		case msg := <-partitionConsumer.Messages():
+			log.Infof("consuming message offset %d\n", msg.Offset)
+
+			v := anaconda.Tweet{}
+
+			err := json.Unmarshal(msg.Value, &v)
+
+			if err != nil {
+				log.Errorf("failed to unmarshalled consumed tweet: %s", err.Error())
 			}
+
+			consumed++
+
+			go func() {
+				err := session.Query(`insert into tweet(id, user, created_at, text) values (?, ?, ?, ?)`,
+					gocql.TimeUUID(),
+					user{UserID: v.User.Id, CreatedAt: v.User.CreatedAt, Name: v.User.Name, ScreenName: v.User.ScreenName, Followers: v.User.FollowersCount},
+					v.CreatedAt,
+					v.Text).Exec()
+
+				if err != nil {
+					log.Fatalf("failed to insert tweet into database: %s", err.Error())
+				}
+			}()
+
+		case <-signals:
+			break ConsumerLoop
 		}
 	}
 
-	ch := make(chan os.Signal)
-	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-	log.Println(<-ch)
-
-	log.Info("stopping stream")
-	s.Stop()
 }
